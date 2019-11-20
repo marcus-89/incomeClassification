@@ -30,7 +30,7 @@ df <- na.omit(df) #we remove these and focus on the remaining 30k observations
 #certain variables are either already explained through other variables or not wanted (weight) and can be removed
 df <- subset(df, select = -c(edunum, weight, marital))
 
-#an overview of the conditional distribution of Y (income) given each factor
+#an overview of the conditional distribution of Y (income class) given each factor
 factors <- c("workclass","education", "occupation", "relationship", "race", "sex", "native")
 sapply(df[factors],function(x)table(x,df$income))
 
@@ -66,6 +66,8 @@ df$workclass[df$workclass == "State-gov" |
                df$workclass == "Local-gov"] <- "Other-gov"
 df$workclass[df$workclass == "Self-emp-inc" |
                df$workclass == "Self-emp-not-inc"] <- "Self-employed"
+df$workclass[df$workclass == "Without-pay" |
+               df$workclass == "Never-worked"] <- "Unemployed"
 
 table(df$workclass, df$income)
 
@@ -153,6 +155,7 @@ ggplot(aes(x = value, y = n, fill = income)) +
   geom_text(aes(label = label), size = 2, position = position_stack(vjust=0.7)) + 
   custom_theme() +
   labs(x = "Workclass", y = "Count", fill = "Income") -> factor_barplot
+factor_barplot
 
 #and for education
 factor_barplot %+% 
@@ -208,7 +211,7 @@ ggplot(df, aes(x=caploss, fill=income)) +
   custom_theme() +
   labs(x = "Capital losses", y = "Count", fill = "Income")
 
-#and finally, the distribution of income
+#and finally, the distribution of the income classes overall
 df %>%
   dplyr::select(income) %>%
   group_by(income) %>%
@@ -224,7 +227,7 @@ df %>%
 
 #which may not seem very interesting at a first glance, but it allows us to set a threshold for the lowest
 #reasonable misclassification rate. obviously a misclassification rate of anything above 1-0.7511 is entirely
-#useless since we could obtain better by just classifying everything as <=50k. let's save that for later
+#useless since we could obtain better by just classifying everyone as <=50k. let's save that for later
 
 basemcr = mean(as.numeric(df$income)-1)
 
@@ -234,7 +237,7 @@ basemcr = mean(as.numeric(df$income)-1)
 train = sample(1:nrow(df), nrow(df)*0.8)
 y_test<-df[-train,12]
 
-##Decision tree
+##Classification tree
 m1.dt = tree(income~.,df,subset=train)
 
 summary(m1.dt)
@@ -254,7 +257,7 @@ sens.dt<-pred.dt[2,2]/sum(pred.dt[,2])
 
 mcr.dt;sens.dt;spec.dt
 
-#prune the tree
+#prune the tree, 5 terminal nodes seem fine based on the plot above
 m2.dt <- prune.misclass(m1.dt,best=5)
 
 summary(m2.dt)
@@ -271,7 +274,7 @@ mcr.dt_pruned <- 1-(pred.dt_pruned[1,1]+pred.dt_pruned[2,2])/sum(pred.dt_pruned)
 spec.dt_pruned<-pred.dt_pruned[1,1]/sum(pred.dt_pruned[,1]) #5 % för 0 (<= 50K)
 sens.dt_pruned<-pred.dt_pruned[2,2]/sum(pred.dt_pruned[,2]) #51 % för 1 (> 50K)
 
-#no loss in prediction, but much more comprehensible model. that's a success
+#no loss in prediction, but much more comprehensible model, that'll do
 mcr.dt_pruned;sens.dt_pruned;spec.dt_pruned
 
 
@@ -286,7 +289,7 @@ m1.rf
 
 importance(m1.rf)
 varImpPlot(m1.rf)
-#race and native does not contribute much at all, but first, let's predict on test et and save the performance
+#race and native does not contribute much at all, but first, let's predict the test set and save the performance
 
 #predict testset
 yhat.rf=predict(m1.rf,newdata=df[-train,])
@@ -357,7 +360,7 @@ plot(mscftot,type="l")
 #threshold for minima
 threshold<-alpha.roc[which.min(mscftot)]
 
-#ny ROC-kurva med positionen utsatt
+#new ROC-curve with optimum added
 plot(prf);abline(a=1,b=-1)
 points(x.roc[which.min(mscftot)],y.roc[which.min(mscftot)],pch=19,col="red")
 abline(h=y.roc[which.min(mscftot)],lty=2)
@@ -382,7 +385,7 @@ sens.log<-pred.rf[2,2]/sum(pred.rf[,2])
 
 rocplot.log <- data.frame(y_test,p)
 
-#basic ROC-kurva for log reg 
+#basic ROC-curve for log reg 
 ggplot(rocplot.log, aes(d=y_test, m=p)) + geom_roc(n.cuts=10) +
   style_roc(ylab="Sensitivity", xlab="1-Specificity") + custom_theme()
 
@@ -396,12 +399,18 @@ ggplot(rocplot.log, aes(d=y_test, m=p)) + geom_roc(cutoffs.at = threshold, cutof
   style_roc(ylab="Sensitivity", xlab="1-Specificity") + geom_vline(xintercept=1-x.roc[which.min(mscftot)],lty=2) +
   geom_hline(yintercept=y.roc[which.min(mscftot)],lty=2) + geom_abline(intercept=0,slope=1) + custom_theme()
 
-##Very brief SVM fit
-
-m1.svm<-svm(income~.,data=df,subset=train)
+##SVM
+#rbf kernel, 10 fold cross validation on the training set, tuning over a few gamma and cost parameter values
+#(computationally heavy, run it without the cross val and tuning if time is prioritized)
+m1.svm <- tune.svm(income~.,data=df[train,], kernel = "radial", gamma = 10^(-2:0), cost = 10^(-1:1))
+#best performing model
+summary(m1.svm)
+#fit according to speicification above
+m2.svm <- svm(income~.,data=df,subset=train,probability=T, 
+              gamma = m1.svm$best.parameters[1,1], cost = m1.svm$best.parameters[1,2])
 
 #predict
-svm.yhat = predict(m1.svm,newdata=df[-train,],class=T)
+svm.yhat <- predict(m2.svm,newdata=df[-train,],class=T)
 
 #calculate performance key values
 pred.svm <- table(svm.yhat,y_test)
@@ -472,10 +481,9 @@ pr3 <- prediction(p3, y_test)
 prf3 <- performance(pr3, measure = "sens", x.measure = "spec")
 plot(prf3);abline(a=1,b=-1)
 
-#roc svm (ops, we need to retrain model and explicitly tell the function to calc probabilities and not just class belongings)
-m2.svm<-svm(income~.,data=df,subset=train,probability=T)
+#roc svm
 p4 <- predict(m2.svm,newdata=df[-train,],probability=T)
-p4 <- attr(p4, "probabilities")[,1]
+p4 <- attr(p4, "probabilities")[,2]
 pr4 <- prediction(p4, y_test)
 prf4 <- performance(pr4, measure = "sens", x.measure = "spec")
 plot(prf4);abline(a=1,b=-1)
