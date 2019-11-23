@@ -18,20 +18,26 @@ str(df)
 #check for potential missing data of various shape
 sum(is.na(df)) #0
 colSums(df == 0) #only capgain/caploss have values of zero, which does not seem unreasonable
+sapply(df[sapply(df, is.numeric)], summary) #suspicious looking max in capgain and hrsperwk
+sum(df$capgain == 99999)
+sum(df$hrsperwk == 99) #few observations in each case
+sort(unique(df$capgain)) #large gap between 99999 and 2nd largest value
+sort(unique(df$hrsperwk)) #looks more normal. possibly both of these are simply capped at 99 and 99999
+#not enough information to motivate omitting these
 sapply(df,levels) #several factor variables have "?" levels, with no further information given elsewhere, let's remove these
 
 levels(df$workclass)[1] <- NA
 levels(df$occupation)[1] <- NA
 levels(df$native)[1] <- NA
 
-sum(is.na(df)) #~4200 occurences in ~2k observations
+sum(is.na(df)) #~4200 occurences in ~2k observations overall
 df <- na.omit(df) #we remove these and focus on the remaining 30k observations
 
 #certain variables are either already explained through other variables or not wanted (weight) and can be removed
 df <- subset(df, select = -c(edunum, weight, marital))
 
 #an overview of the conditional distribution of Y (income class) given each factor
-factors <- c("workclass","education", "occupation", "relationship", "race", "sex", "native")
+factors <- colnames(df)[sapply(df, is.factor)][1:7]
 sapply(df[factors],function(x)table(x,df$income))
 
 #many of these contain a lot of factor levels and may be aggregated into wider groups
